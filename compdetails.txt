@@ -1,0 +1,150 @@
+# Define the output file path
+$OutputFilePath = "C:\Temp\RDP_Performance_Log.txt"
+
+# Function to gather system information
+function Get-SystemInfo {
+    $computerName = $env:COMPUTERNAME
+    $username = $env:USERNAME
+    $domain = $env:USERDOMAIN
+    $biosVersion = (Get-CimInstance -ClassName Win32_BIOS).Version
+    $os = (Get-CimInstance -ClassName Win32_OperatingSystem).Caption
+    $cpuName = Get-WmiObject -class Win32_processor | Select-Object -ExpandProperty Name
+    $numberOfCPUs = Get-WmiObject -class Win32_processor | Select-Object -ExpandProperty NumberOfCores
+    $numberOfLogicalCPUs = Get-WmiObject -class Win32_processor | Select-Object -ExpandProperty NumberOfLogicalProcessors 
+    $memorySizeGB = [math]::Round((Get-CimInstance -ClassName Win32_ComputerSystem).TotalPhysicalMemory / 1MB, 2)
+
+    
+    # Get GPU information
+    $gpuInfo = Get-CimInstance -ClassName Win32_VideoController
+    $gpuDetails = @()
+    foreach ($gpu in $gpuInfo) {
+        $gpuDetails += [PSCustomObject]@{
+            Name = $gpuInfo.Name
+            DriverVer = $gpuInfo.DriverVersion
+            MemoryMB = [math]::Round($gpu.AdapterRAM / 1MB, 2)  # Convert bytes to MB
+            CurrentResolution = "$($gpu.CurrentHorizontalResolution)x$($vc.CurrentVerticalResolution)"
+            ColorDepth = $gpu.CurrentBitsPerPixel
+        }
+    }
+
+    # Output the gathered information
+    $output = @()
+    $output += "Computer Name: $computerName"
+    $output += "Username: $username"
+    $output += "Domain: $domain"
+    $output += "BIOS Version: $biosVersion"
+    $output += "Operating System: $os"
+    $output += "CPU Name: $cpuName"
+    $output += "CPU Cores: $numberOfCPUs"
+    $output += "CPU Logical Cores: $numberOfLogicalCPUs"
+    $output += "Memory Size (GB): $memorySizeGB"
+
+    # Log GPU information including monitor info
+    foreach ($gpu in $gpuDetails) {
+        $output += "GPU Name: $($gpuDetails.Name)"
+        $output += "GPU Memory (MB): $($gpuDetails.MemoryMB)"
+        $output += "Current Resolution: $($gpuDetails.CurrentResolution)"
+        $output += "Color Depth: $($gpuDetails.ColorDepth) bits"
+    }
+
+    # Write output to file
+    $output | Out-File -FilePath $OutputFilePath -Encoding UTF8 -Force
+    Write-Host "System information logged to $OutputFilePath."
+}
+
+# Execute the function to gather and log system information
+Get-SystemInfo
+
+# Output CSV file path
+$outputFile = "C:\Temp\PFM.csv"
+
+# Initialize CSV file with headers
+$headers = "DateTime, CPU(Utilization), Total(Memory_MB), Memory(Usage_Percent), GPU_CPU(Usage_Percent), GPU_Total(Memory_TB), GPU_Memory(Usage_Percent), Bytes_Sent, Bytes_Received, FPS"
+$headers | Out-File -FilePath $outputFile -Encoding utf8 -Append
+
+# Function to get GPU information using nvidia-smi
+function Get-GPUInfo {
+    if ($PSVersionTable.PSVersion.Major -ge 5) {
+        # Use nvidia-smi on Windows
+        $nvidia_smi_output = & "C:\Program Files\NVIDIA GPU Compute Driver 512.14\NVIDIA GPU Computing SDK 11.4\NVIDIA GPU Computing SDK\NVTX\bin\nvidia-smi.exe" --query-gpu="name, utilization.gpu, memory.total, memory.used"
+        
+        if ($LASTEXITCODE -eq 0) {
+            # Parse the GPU metrics
+            $gpu_name = ($nvidia_smi_output | Select-String "Name").ToString().Trim()
+            $gpu_utilization = ($nvidia_smi_output | Select-String "Utilization").ToString().Trim() -split ":" | Select-Object -Last 1 
+            $gpu_total_memory = ($nvidia_smi_output | Select-String "memory.total").ToString().Trim() -split ":" | Select-Object -Last 1 
+            $gpu_used_memory = ($nvidia_smi_output | Select-String "memory.used").ToString().Trim() -split ":" | Select-Object -Last 1 
+            
+            return [PSCustomObject]@{
+                Name           = $gpu_name
+                Utilization    = [math]::Round($gpu_utilization, 2)
+                TotalMemory    = [math]::Round($gpu_total_memory / 1TB, 2)  # Divide by 1TB (1 * 10^12 bytes)
+                UsedMemory     = [math]::Round($gpu_used_memory / 1TB, 2)   # Divide by 1TB (1 * 10^12 bytes)
+            }
+        }
+    }
+    return $null
+}
+
+# Function to collect performance metrics
+function Collect-PerformanceMetrics {
+    # Get Date/Time
+    $dateTime = Get-Date
+
+    # Get CPU Utilization
+    $cpuUtilization = (Get-Counter "\Processor(_Total)\% Processor Time").CounterSamples.CookedValue
+
+    # Get Memory Metrics
+    $memory = Get-WmiObject -Class Win32_OperatingSystem
+    $totalMemory = [math]::Round($memory.TotalVisibleMemorySize / 1MB, 2)
+    $freeMemory = [math]::Round($memory.FreePhysicalMemory / 1MB, 2)
+    $memoryUtilization = [math]::Round(($totalMemory - $freeMemory) / $totalMemory * 100, 2)
+
+    # Get Network Bandwidth
+    $netIOSent = Get-Counter "\Network Interface(*)\Bytes Sent/sec"
+    $bytesSent = ($netIOSent.CounterSamples | Where-Object { $_.InstanceName -ne "_Total" } | Measure-Object -Property CookedValue -Sum).Sum
+
+    $netIOReceived = Get-Counter "\Network Interface(*)\Bytes Received/sec"
+    $bytesReceived = ($netIOReceived.CounterSamples | Where-Object { $_.InstanceName -ne "_Total" } | Measure-Object -Property CookedValue -Sum).Sum
+
+    # Get GPU Info
+    $gpuInfo = Get-GPUInfo
+    if ($gpuInfo) {
+        $gpuCPUUtilization = [math]::Round($gpuInfo.Utilization, 2)
+        $totalGPUMemory = [math]::Round($gpuInfo.TotalMemory, 2)
+        $memoryUtilizationGPU = [math]::Round(($totalGPUMemory - $gpuInfo.UsedMemory) / $totalGPUMemory * 100, 2)
+    } else {
+        $gpuCPUUtilization = 0
+        $totalGPUMemory = 0
+        $memoryUtilizationGPU = 0
+    }
+    
+    # Placeholder for FPS, modify based on actual FPS capture logic
+    $fps = 60  # Static value for example
+
+    # Output metrics as a CSV row
+    $row = @()
+    $row += $dateTime.ToString("yyyy-MM-dd HH:mm:ss") # DateTime
+    $row += $cpuUtilization # CPU Utilization
+    $row += [math]::Round($totalMemory, 2) # Total Memory
+    $row += [math]::Round($memoryUtilization, 2) # Memory Usage
+    $row += [math]::Round($gpuCPUUtilization, 2) # GPU CPU Usage
+    $row += [math]::Round($totalGPUMemory, 2) # Total GPU Memory
+    $row += [math]::Round($memoryUtilizationGPU, 2) # GPU Memory Usage
+    $row += $bytesSent # Bytes Sent
+    $row += $bytesReceived # Bytes Received
+    $row += $fps # FPS
+
+    # Append the metric row to the CSV file, ensuring the correct format of values
+    $row -join "," | Out-File -FilePath $outputFile -Append -Encoding utf8
+}
+
+# Main loop to collect metrics
+try {
+    while ($true) {
+        Collect-PerformanceMetrics
+        Start-Sleep -Seconds 3  # Sleep for 3 seconds
+    }
+} catch {
+    Write-Host "Metrics collection stopped."
+}

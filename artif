@@ -1,208 +1,51 @@
 
-Add-Type -AssemblyName System.Windows.Forms
-Add-Type -AssemblyName System.Drawing
+# Define Variables
+$ArtifactoryBaseUrl = "https://your-artifactory.com/artifactory"  # Replace with your Artifactory URL
+$RepoName = "my-repo"  # Replace with your repository name
+$ApiKey = "YOUR_API_KEY"  # Replace with your Artifactory API Key
+$OutputFile = "FolderStructure.txt"
 
-# Create Form
-$form = New-Object System.Windows.Forms.Form
-$form.Text = "Artifactory File Uploader"
-$form.Size = New-Object System.Drawing.Size(600,550)
-$form.StartPosition = "CenterScreen"
+# Define API URL to get repo structure
+$ApiUrl = "$ArtifactoryBaseUrl/api/storage/$RepoName"
 
-# Artifactory URL
-$lblArtifactoryUrl = New-Object System.Windows.Forms.Label
-$lblArtifactoryUrl.Text = "Artifactory URL:"
-$lblArtifactoryUrl.Location = New-Object System.Drawing.Point(20,20)
-$form.Controls.Add($lblArtifactoryUrl)
-
-$txtArtifactoryUrl = New-Object System.Windows.Forms.TextBox
-$txtArtifactoryUrl.Location = New-Object System.Drawing.Point(140,18)
-$txtArtifactoryUrl.Width = 400
-$txtArtifactoryUrl.Text = "https://your-artifactory-instance.com"
-$form.Controls.Add($txtArtifactoryUrl)
-
-# Username
-$lblUser = New-Object System.Windows.Forms.Label
-$lblUser.Text = "Username:"
-$lblUser.Location = New-Object System.Drawing.Point(20,60)
-$form.Controls.Add($lblUser)
-
-$txtUser = New-Object System.Windows.Forms.TextBox
-$txtUser.Location = New-Object System.Drawing.Point(140,58)
-$txtUser.Width = 200
-$form.Controls.Add($txtUser)
-
-# Password
-$lblPass = New-Object System.Windows.Forms.Label
-$lblPass.Text = "Password:"
-$lblPass.Location = New-Object System.Drawing.Point(20,100)
-$form.Controls.Add($lblPass)
-
-$txtPass = New-Object System.Windows.Forms.TextBox
-$txtPass.Location = New-Object System.Drawing.Point(140,98)
-$txtPass.Width = 200
-$txtPass.PasswordChar = '*'
-$form.Controls.Add($txtPass)
-
-# Login Button
-$btnLogin = New-Object System.Windows.Forms.Button
-$btnLogin.Text = "Login"
-$btnLogin.Location = New-Object System.Drawing.Point(360, 78)
-$form.Controls.Add($btnLogin)
-
-# Repository Selection
-$lblRepo = New-Object System.Windows.Forms.Label
-$lblRepo.Text = "Select Repository:"
-$lblRepo.Location = New-Object System.Drawing.Point(20,140)
-$form.Controls.Add($lblRepo)
-
-$cmbRepo = New-Object System.Windows.Forms.ComboBox
-$cmbRepo.Location = New-Object System.Drawing.Point(140,138)
-$cmbRepo.Width = 250
-$form.Controls.Add($cmbRepo)
-
-# Retrieve Repo Structure Button
-$btnGetRepoStructure = New-Object System.Windows.Forms.Button
-$btnGetRepoStructure.Text = "Get Repo Structure"
-$btnGetRepoStructure.Location = New-Object System.Drawing.Point(400, 136)
-$form.Controls.Add($btnGetRepoStructure)
-
-# File Selection
-$lblFile = New-Object System.Windows.Forms.Label
-$lblFile.Text = "Select File:"
-$lblFile.Location = New-Object System.Drawing.Point(20,180)
-$form.Controls.Add($lblFile)
-
-$txtFilePath = New-Object System.Windows.Forms.TextBox
-$txtFilePath.Location = New-Object System.Drawing.Point(140,178)
-$txtFilePath.Width = 250
-$form.Controls.Add($txtFilePath)
-
-$btnBrowse = New-Object System.Windows.Forms.Button
-$btnBrowse.Text = "Browse"
-$btnBrowse.Location = New-Object System.Drawing.Point(400,176)
-$form.Controls.Add($btnBrowse)
-
-# Upload Button
-$btnUpload = New-Object System.Windows.Forms.Button
-$btnUpload.Text = "Upload"
-$btnUpload.Location = New-Object System.Drawing.Point(200, 220)
-$form.Controls.Add($btnUpload)
-
-# Log Box
-$lblLog = New-Object System.Windows.Forms.Label
-$lblLog.Text = "Logs:"
-$lblLog.Location = New-Object System.Drawing.Point(20,260)
-$form.Controls.Add($lblLog)
-
-$txtLog = New-Object System.Windows.Forms.TextBox
-$txtLog.Location = New-Object System.Drawing.Point(20,280)
-$txtLog.Width = 540
-$txtLog.Height = 200
-$txtLog.Multiline = $true
-$txtLog.ScrollBars = "Vertical"
-$form.Controls.Add($txtLog)
-
-# Logging Function
-function Write-Log {
-    param ([string]$message)
-    $txtLog.AppendText("$message`r`n")
+# Headers for Authentication
+$Headers = @{
+    "X-JFrog-Art-Api" = $ApiKey
 }
 
-# Function to Get Repo Structure
-function Get-ArtifactoryRepoStructure {
-    param (
-        [string]$artifactoryUrl,
-        [string]$repo,
-        [string]$user,
-        [string]$password
-    )
+$Headers = @{
+    Authorization = "Basic " + [Convert]::ToBase64String([Text.Encoding]::ASCII.GetBytes("username:password"))
+}
 
-    $apiEndpoint = "$artifactoryUrl/api/storage/$repo"
-    $pair = "$user`:$password"
-    $bytes = [System.Text.Encoding]::UTF8.GetBytes($pair)
-    $base64 = [System.Convert]::ToBase64String($bytes)
-    $headers = @{Authorization = "Basic $base64"}
+# Function to Recursively Get Folder Structure
+function Get-FolderStructure {
+    param ($Url, $Indent)
 
-    try {
-        Write-Log "Fetching repository structure from: $apiEndpoint"
-        $response = Invoke-RestMethod -Uri $apiEndpoint -Headers $headers -Method Get
-        if ($response.children) {
-            Write-Log "Repository structure retrieved successfully."
-            return $response.children | ForEach-Object { $_.uri }
-        } else {
-            Write-Log "No files or folders found in repository."
-            return @()
+    $Response = Invoke-RestMethod -Uri $Url -Headers $Headers -Method Get
+
+    if ($Response.children) {
+        foreach ($Child in $Response.children) {
+            $ChildUrl = "$Url/$($Child.uri.Trim('/'))"
+            $Indentation = " " * $Indent
+            $Type = if ($Child.folder) { "[Folder]" } else { "[File]" }
+
+            # Output to console and file
+            $Line = "$Indentation$Type $($Child.uri.Trim('/'))"
+            Write-Output $Line
+            Add-Content -Path $OutputFile -Value $Line
+
+            # If it's a folder, recurse into it
+            if ($Child.folder) {
+                Get-FolderStructure -Url $ChildUrl -Indent ($Indent + 2)
+            }
         }
-    } catch {
-        Write-Log "Error retrieving repository structure: $_"
-        return @()
     }
 }
 
-# Function to Upload File
-function Upload-ToArtifactory {
-    param (
-        [string]$artifactoryUrl,
-        [string]$filePath,
-        [string]$repo,
-        [string]$user,
-        [string]$password
-    )
+# Start Retrieving the Structure
+Write-Output "Retrieving folder structure of '$RepoName'..."
+Add-Content -Path $OutputFile -Value "Folder Structure of '$RepoName':"
 
-    if (-not (Test-Path $filePath)) {
-        Write-Log "Error: File not found!"
-        return
-    }
+Get-FolderStructure -Url $ApiUrl -Indent 0
 
-    $fileName = [System.IO.Path]::GetFileName($filePath)
-    $destinationUrl = "$artifactoryUrl/$repo/$fileName"
-
-    $pair = "$user`:$password"
-    $bytes = [System.Text.Encoding]::UTF8.GetBytes($pair)
-    $base64 = [System.Convert]::ToBase64String($bytes)
-    $headers = @{Authorization = "Basic $base64"}
-
-    try {
-        Write-Log "Uploading file '$fileName' to $destinationUrl..."
-        Invoke-RestMethod -Uri $destinationUrl -Headers $headers -Method Put -InFile $filePath -ContentType "application/octet-stream"
-        Write-Log "Upload Successful!"
-    } catch {
-        Write-Log "Upload Failed: $_"
-    }
-}
-
-# Browse Button Click Event
-$btnBrowse.Add_Click({
-    $openFileDialog = New-Object System.Windows.Forms.OpenFileDialog
-    if ($openFileDialog.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {
-        $txtFilePath.Text = $openFileDialog.FileName
-        Write-Log "Selected file: $($txtFilePath.Text)"
-    }
-})
-
-# Get Repository Structure Button Click Event
-$btnGetRepoStructure.Add_Click({
-    if (-not $txtArtifactoryUrl.Text -or -not $cmbRepo.SelectedItem -or -not $txtUser.Text -or -not $txtPass.Text) {
-        Write-Log "Error: Please enter Artifactory URL, select a repository, and provide credentials!"
-        return
-    }
-
-    $repoStructure = Get-ArtifactoryRepoStructure -artifactoryUrl $txtArtifactoryUrl.Text -repo $cmbRepo.SelectedItem -user $txtUser.Text -password $txtPass.Text
-    if ($repoStructure.Count -gt 0) {
-        Write-Log "Repository contents:"
-        $repoStructure | ForEach-Object { Write-Log $_ }
-    }
-})
-
-# Upload Button Click Event
-$btnUpload.Add_Click({
-    if (-not $txtArtifactoryUrl.Text -or -not $txtFilePath.Text -or -not $cmbRepo.SelectedItem) {
-        Write-Log "Error: Please enter Artifactory URL, select a file, and choose a repository!"
-        return
-    }
-
-    Upload-ToArtifactory -artifactoryUrl $txtArtifactoryUrl.Text -filePath $txtFilePath.Text -repo $cmbRepo.SelectedItem -user $txtUser.Text -password $txtPass.Text
-})
-
-# Run the Form
-$form.ShowDialog()
+Write-Output "Folder structure saved to '$OutputFile'"

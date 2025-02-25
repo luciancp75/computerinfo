@@ -1,51 +1,48 @@
 
-# Define Variables
-$ArtifactoryBaseUrl = "https://your-artifactory.com/artifactory"  # Replace with your Artifactory URL
-$RepoName = "my-repo"  # Replace with your repository name
-$ApiKey = "YOUR_API_KEY"  # Replace with your Artifactory API Key
-$OutputFile = "FolderStructure.txt"
+# Get the list of active RDS sessions
+$sessions = query user | Select-String "Active|Disc"
 
-# Define API URL to get repo structure
-$ApiUrl = "$ArtifactoryBaseUrl/api/storage/$RepoName"
+# Create an empty array to store client details
+$clientDetails = @()
 
-# Headers for Authentication
-$Headers = @{
-    "X-JFrog-Art-Api" = $ApiKey
-}
+foreach ($session in $sessions) {
+    # Extract session ID
+    $sessionInfo = $session -split '\s{2,}'
+    $username = $sessionInfo[0]
+    $sessionID = $sessionInfo[2]
 
-$Headers = @{
-    Authorization = "Basic " + [Convert]::ToBase64String([Text.Encoding]::ASCII.GetBytes("username:password"))
-}
+    # Get the client machine name
+    $clientName = (quser | Select-String $username).ToString() -match '(\S+)\s+\S+\s+\S+\s+(\S+)' | Out-Null
+    $clientName = $matches[1]
 
-# Function to Recursively Get Folder Structure
-function Get-FolderStructure {
-    param ($Url, $Indent)
-
-    $Response = Invoke-RestMethod -Uri $Url -Headers $Headers -Method Get
-
-    if ($Response.children) {
-        foreach ($Child in $Response.children) {
-            $ChildUrl = "$Url/$($Child.uri.Trim('/'))"
-            $Indentation = " " * $Indent
-            $Type = if ($Child.folder) { "[Folder]" } else { "[File]" }
-
-            # Output to console and file
-            $Line = "$Indentation$Type $($Child.uri.Trim('/'))"
-            Write-Output $Line
-            Add-Content -Path $OutputFile -Value $Line
-
-            # If it's a folder, recurse into it
-            if ($Child.folder) {
-                Get-FolderStructure -Url $ChildUrl -Indent ($Indent + 2)
+    # If client name is valid, proceed to get additional details
+    if ($clientName -and $clientName -ne "console") {
+        try {
+            # Get OS Information
+            $osInfo = Invoke-Command -ComputerName $clientName -ScriptBlock {
+                Get-WmiObject Win32_OperatingSystem | Select-Object Caption, Version, OSArchitecture
+            } -Credential (Get-Credential) -ErrorAction SilentlyContinue
+            
+            # Get Monitor Configuration
+            $monitorInfo = Invoke-Command -ComputerName $clientName -ScriptBlock {
+                Get-WmiObject Win32_DesktopMonitor | Select-Object DeviceID, ScreenWidth, ScreenHeight
+            } -Credential (Get-Credential) -ErrorAction SilentlyContinue
+            
+            # Store data in hash table
+            $clientDetails += [PSCustomObject]@{
+                Username      = $username
+                ClientName    = $clientName
+                SessionID     = $sessionID
+                OS            = $osInfo.Caption
+                OSVersion     = $osInfo.Version
+                Architecture  = $osInfo.OSArchitecture
+                Monitors      = $monitorInfo
             }
+        } catch {
+            Write-Host "Error fetching details for $clientName"
         }
     }
 }
 
-# Start Retrieving the Structure
-Write-Output "Retrieving folder structure of '$RepoName'..."
-Add-Content -Path $OutputFile -Value "Folder Structure of '$RepoName':"
-
-Get-FolderStructure -Url $ApiUrl -Indent 0
-
-Write-Output "Folder structure saved to '$OutputFile'"
+# Output results
+$clientDetails | Format-Table -AutoSize
